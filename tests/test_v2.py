@@ -94,9 +94,18 @@ def test_physics_term_is_zero_at_the_true_state(small):
     s = np.concatenate([smp.s for smp in samples[:8]])
     b.meas[:, 2] = torch.tensor(s.real, dtype=torch.float32)
     b.meas[:, 3] = torch.tensor(s.imag, dtype=torch.float32)
-    y = b.y
-    out = torch.stack([y[:, 0], torch.sin(y[:, 1]), torch.cos(y[:, 1])], 1)
-    assert train.physics_residual(out, b, fd).max().item() < 1e-6
+    assert train.physics_residual(b.y[:, 0], b.y[:, 1], b, fd).max().item() < 1e-6
+
+
+def test_scaled_outputs_round_trip(small):
+    """The fixed recipe's outputs are |V| and angle standardised by the training set; a model that
+    outputs the standardised truth must give back the truth."""
+    _, _, data = small
+    norm = train.Normalizer(data)
+    y = torch.cat([d.y for d in data[:4]])
+    z = (y - norm.y_mean) / norm.y_std
+    vm, va = train.to_state(z, "scaled", norm)
+    assert torch.allclose(vm, y[:, 0], atol=1e-6) and torch.allclose(va, y[:, 1], atol=1e-6)
 
 
 def test_graph_has_only_energised_lines(small):

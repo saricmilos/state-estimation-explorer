@@ -65,18 +65,25 @@ def collect() -> dict:
             "average_profile": runs[0]["average_profile"],
             "leak_test": {name: _stats([r["leak_test"][name]["vm_mae"] for r in runs]) for name in runs[0]["leak_test"]},
             "per_bus_bias_seed0": runs[0][nb]["per_bus_mag_err"],
+            "runs": [{"seed": r["seed"], "thesis_way_vm_mae": r[nb]["mae_mag"], "thesis_way_va_mae": r[nb]["mae_ang"],
+                      "vm_mae": r["per_sample"]["vm_mae"], "vm_bias": r["per_sample"]["vm_bias"],
+                      "vm_mae_variances_shuffled": r["leak_test"]["variances"]["vm_mae"],
+                      "vm_mae_pseudo_values_shuffled": r["leak_test"]["pseudo_values"]["vm_mae"]} for r in runs],
         }
     wls_file = V1 / "wls_table7.json"
     if wls_file.exists():
         draws = json.loads(wls_file.read_text(encoding="utf-8"))
         res["v1"]["wls"] = {k: _stats([d[k]["vm_mae"] for d in draws]) for k in ("as_is", "injections_fixed")}
 
-    for kind in ("gnn", "pinn"):
-        runs = _runs(V2, kind)
+    backfill_training_error()
+    for name in V2_MODELS:
+        runs = _runs(V2, name)
         if runs:
-            res["v2"][kind] = {
+            res["v2"][name] = {
                 "seeds": [r["seed"] for r in runs],
+                "alpha": runs[0].get("alpha"),
                 "per_sample": {k: _stats([r["per_sample"][k] for r in runs]) for k in runs[0]["per_sample"] if k != "samples"},
+                "on_training_samples": {k: _stats([r["on_training_samples"][k] for r in runs]) for k in ("vm_mae", "vm_bias")},
                 "thesis_way": {k: _stats([r["thesis_way"][k] for r in runs]) for k in runs[0]["thesis_way"]},
                 "per_bus_vm_mae": np.mean([r["per_bus_vm_mae"] for r in runs], axis=0).tolist(),
                 "physics_residual_mean": _stats([r["physics_residual_mean"] for r in runs]),
@@ -84,9 +91,52 @@ def collect() -> dict:
             }
     wls_v2 = V2 / "wls" / "result.json"
     if wls_v2.exists():
-        res["v2"]["wls"] = json.loads(wls_v2.read_text(encoding="utf-8"))
+        res["v2"]["wls"] = json.loads(wls_v2.read_text(encoding="utf-8")) | {"physics_residual_mean": wls_residual()}
     res["v2"]["average_profile"] = average_profile_v2()
+    sel = sorted(V2.glob("select_alpha/alpha_*.json"))
+    if sel:
+        res["v2"]["select_alpha"] = [json.loads(f.read_text(encoding="utf-8")) for f in sel]
+    cfg = V2 / "configs.json"
+    if cfg.exists():
+        res["v2"]["configs"] = json.loads(cfg.read_text(encoding="utf-8"))
     return res
+
+
+# v2's models: data fixed with v1's training ("gnn", "pinn"), then training fixed too ("-scaled")
+V2_MODELS = ("gnn", "pinn", "gnn-scaled", "pinn-scaled")
+
+
+def wls_residual() -> float:
+    """The same physics residual as the models', for WLS's saved estimates."""
+    import torch
+    from torch_geometric.data import Batch
+
+    from . import phase2, train
+
+    fd, _, _, te, _ = phase2.split()
+    p = np.load(V2 / "wls" / "pred.npz")
+    vm, va = (torch.tensor(p[k].reshape(-1), dtype=torch.float32) for k in ("vm", "va"))
+    return float(train.physics_residual(vm, va, Batch.from_data_list(list(te)), fd).mean())
+
+
+def backfill_training_error():
+    """Runs made before result.json recorded the error on the model's own training samples get it
+    now, from their saved weights."""
+    from . import metrics, phase2, train
+
+    todo = [d for d in sorted(V2.glob("*_seed*"))
+            if (d / "result.json").exists() and "on_training_samples" not in json.loads((d / "result.json").read_text(encoding="utf-8"))]
+    if not todo:
+        return
+    fd, samples, tr, *_ = phase2.split()
+    vm_t, va_t = phase2.truth(samples[:400])
+    for d in todo:
+        kind, recipe, model, norm = phase2.load_model(d)
+        vm_p, va_p, _ = train.predict(model, norm, tr[:400], fd, recipe)
+        r = json.loads((d / "result.json").read_text(encoding="utf-8"))
+        r["recipe"] = recipe
+        r["on_training_samples"] = metrics.per_sample(vm_p, va_p, vm_t, va_t)
+        (d / "result.json").write_text(json.dumps(r, indent=2), encoding="utf-8")
 
 
 def average_profile_v2() -> dict:
@@ -153,29 +203,40 @@ def phase1_md(r: dict) -> str:
     if "gnn" in r["v1"]:
         g = r["v1"]["gnn"]
         ap = g["average_profile"]
-        L += ["**The thesis's metric can't tell a model from a constant.** The same metric applied to an",
-              "answer that never looks at a measurement (always the training set's average voltage profile):",
-              "",
-              "| On v1's test set | Thesis's metric, |V| MAE | Every bus of every sample, |V| MAE |", "|---|---|---|",
-              f"| Average profile, no model | {f4(ap['thesis_way']['vm_mae'])} | {f4(ap['per_sample']['vm_mae'])} |",
-              f"| v1 GNN (mean of {g['per_sample']['vm_mae']['n']} runs) | {f4(g['thesis_way']['mae_mag']['mean'])} | {f4(g['per_sample']['vm_mae']['mean'])} |"]
-        if "pinn" in r["v1"]:
-            q = r["v1"]["pinn"]
-            L.append(f"| v1 PINN | {f4(q['thesis_way']['mae_mag']['mean'])} | {f4(q['per_sample']['vm_mae']['mean'])} |")
+        L += ["Three things at once, run by run: the thesis's metric, the error on every bus of every test",
+              "sample, the constant offset (mean error), and the error once the leaked features are shuffled",
+              "between test samples (same bus, another sample: a model that doesn't read the truth from them",
+              "is unaffected). The first row never looks at a measurement: it always answers the training",
+              "set's average voltage profile.", "",
+              "| On v1's test set | Thesis's metric, |V| MAE | Every bus of every sample, |V| MAE | Offset | Variances shuffled |",
+              "|---|---|---|---|---|",
+              f"| Average profile, no model | {f4(ap['thesis_way']['vm_mae'])} | {f4(ap['per_sample']['vm_mae'])} | "
+              f"{ap['per_sample']['vm_bias']:+.4f} | – |"]
+        for kind, label in (("gnn", "GNN"), ("pinn", "PINN")):
+            for run in r["v1"].get(kind, {}).get("runs", []):
+                L.append(f"| v1 {label}, seed {run['seed']} | {f4(run['thesis_way_vm_mae'])} | {f4(run['vm_mae'])} | "
+                         f"{run['vm_bias']:+.4f} | {f4(run['vm_mae_variances_shuffled'])} |")
+        gr = g["runs"]
+        tw = [x["thesis_way_vm_mae"] for x in gr]
+        const_tw, const_ps = ap["thesis_way"]["vm_mae"], ap["per_sample"]["vm_mae"]
+        winners = [x for x in gr if x["vm_mae"] < const_ps]
         L += ["",
-              "Averaging 32 scenarios before comparing cancels every error that differs from sample to sample,",
-              "so what is left is a model's constant offset. Errors have to be taken per sample, before any",
-              "averaging.", ""]
-        lk = g["leak_test"]
-        L += ["**The inputs contain the answer.** At an unmetered bus v1 gives the model a pseudo-measured",
+              "**The thesis's metric can't tell a model from a constant.** Averaging 32 scenarios before",
+              "comparing cancels every error that differs from sample to sample, so what is left is a model's",
+              "constant offset. "
+              + ("The constant scores better than every GNN run on it, and " if const_tw < min(tw) else "")
+              + f"the same model scores between {f4(min(tw))} and {f4(max(tw))} ({max(tw) / min(tw):.0f} times as much)",
+              "depending on where training stopped. Errors have to be taken per sample.", "",
+              "**The inputs contain the answer.** At an unmetered bus v1 gives the model a pseudo-measured",
               "voltage centred on the true voltage, and variances computed from the true values:",
               "Var(V) = (0.3 × true |V|)², Var(P) = (0.3 × true P)². So 23 of the 33 buses carry their true",
               "|V| exactly, in a feature (`gridcal_utils/pmu_smartmeter_pseudo_measurment_generation.py`, lines",
-              "133, 200–221). Shuffling those features between test samples (same bus, another sample):", "",
-              "| v1 GNN, every bus of every sample | |V| MAE |", "|---|---|",
-              f"| As trained | {f4(g['per_sample']['vm_mae']['mean'])} |",
-              f"| Variances shuffled | {f4(lk['variances']['mean'])} |",
-              f"| Pseudo-measured values shuffled | {f4(lk['pseudo_values']['mean'])} |", ""]
+              "133, 200–221). "
+              + (f"{len(winners)} of {len(gr)} GNN runs beat the constant per sample (seeds "
+                 + ", ".join(str(x["seed"]) for x in winners) + "); with their variances shuffled, "
+                 + ("all of them fall behind it." if all(x["vm_mae_variances_shuffled"] > const_ps for x in winners)
+                    else "they get worse.")
+                 if winners else "No GNN run beats the constant per sample."), ""]
     if "wls" in r["v1"]:
         w = r["v1"]["wls"]
         L += ["**WLS was given wrong injections.** v1 recorded each load as +P where GridCal counts an",
@@ -207,40 +268,127 @@ def phase1_md(r: dict) -> str:
     return "\n".join(L)
 
 
+LABELS = {
+    "average_profile": "Average profile, no measurements",
+    "wls": "WLS (GridCal)",
+    "gnn": "GNN, thesis's training",
+    "pinn": "PINN (Ohm's law fixed), thesis's training",
+    "gnn-scaled": "GNN, training fixed",
+    "pinn-scaled": "PINN (Ohm's law fixed), training fixed",
+}
+
+
+def _estimator_rows(v2: dict) -> list[tuple[str, dict, dict, int]]:
+    """(name, per-sample metrics as plain numbers, thesis-way metrics, runs) for each estimator."""
+    out = []
+    for name in ("average_profile", "wls"):
+        if name in v2:
+            out.append((name, v2[name]["per_sample"], v2[name]["thesis_way"], 1))
+    for name in V2_MODELS:
+        if name in v2:
+            m = v2[name]
+            out.append((name, {k: s["mean"] for k, s in m["per_sample"].items()},
+                        {k: s["mean"] for k, s in m["thesis_way"].items()}, m["per_sample"]["vm_mae"]["n"]))
+    return out
+
+
 def phase2_md(r: dict) -> str:
     v2 = r["v2"]
     L = ["# Phase 2: v2, the thesis with its bugs fixed", ""]
     L += ["Generated by `python -m dsse.evaluate` from the runs of `dsse.phase2`.", "",
           "Kept from v1: the IEEE 33-bus feeder, the scenario generator (each load times 1 + 0.5 N(0,1)),",
           "2,000 samples split 1,600 / 400, 10 metered buses per sample placed at random (2 PMUs), the",
-          "meters' noise and bias, the GNN (v1's class, run from the notebook's cell), its 17 input",
-          "features per bus, its settings (100 epochs, Adam 1e-3, batch 32), and the PINN's α = 0.1.",
-          "Nothing was tuned. Fixed: everything in phase 1, listed in `dsse/scenarios.py` and",
-          "`dsse/train.py`.", ""]
-    L += ["## Results on the 400 test samples, every bus of every sample", ""]
-    L += ["| Estimator | |V| MAE (p.u.) | |V| RMSE | |V| 95th pct | worst bus | angle MAE (rad) | thesis's metric, |V| MAE |",
-          "|---|---|---|---|---|---|---|"]
+          "meters' noise and bias, the GNN and PINN classes (run from the notebook's cells), the 17 input",
+          "features per bus, 100 epochs, Adam at 1e-3, batch 32. Fixed in the data and the physics term:",
+          "everything in phase 1 (`dsse/scenarios.py`, `dsse/grid.py`, `dsse/train.py`). The test set is",
+          "the last 400 samples and plays no part in any choice.", ""]
 
-    def row(label, ps, tw, multi=False):
-        g = (lambda k: ps[k]["mean"]) if multi else (lambda k: ps[k])
-        t = tw["vm_mae"]["mean"] if multi else tw["vm_mae"]
-        return f"| {label} | {f4(g('vm_mae'))} | {f4(g('vm_rmse'))} | {f4(g('vm_p95'))} | {f4(g('vm_max'))} | {f4(g('va_mae'))} | {f4(t)} |"
-
-    ap = v2["average_profile"]
-    L.append(row("Average profile, no measurements", ap["per_sample"], ap["thesis_way"]))
+    L += ["## Results on the 400 test samples", "",
+          "Every bus of every sample; models are the mean over their training runs (seeds). The last",
+          "column is the thesis's own metric, for comparison with Tables 7 to 9.", "",
+          "| Estimator | Runs | |V| MAE (p.u.) | |V| RMSE | 95th percentile | Largest | Angle MAE (rad) | Thesis's metric |",
+          "|---|---|---|---|---|---|---|---|"]
+    rows = _estimator_rows(v2)
+    for name, ps, tw, n in rows:
+        L.append(f"| {LABELS[name]} | {n} | {f4(ps['vm_mae'])} | {f4(ps['vm_rmse'])} | {f4(ps['vm_p95'])} | "
+                 f"{f4(ps['vm_max'])} | {f4(ps['va_mae'])} | {f4(tw['vm_mae'])} |")
+    L += [""]
+    for name in V2_MODELS:
+        if name in v2:
+            m = v2[name]
+            extra = f"; α = {m['alpha']:g}" if m.get("alpha") is not None else ""
+            L.append(f"- {LABELS[name]}: |V| MAE over runs {rng(m['per_sample']['vm_mae'])}; mean physics residual "
+                     f"of its predictions {m['physics_residual_mean']['mean']:.2e} p.u. per line{extra}.")
     if "wls" in v2:
-        L.append(row("WLS (GridCal)", v2["wls"]["per_sample"], v2["wls"]["thesis_way"]))
-    for kind, label in (("gnn", "GNN"), ("pinn", "PINN (Ohm's law term fixed)")):
-        if kind in v2:
-            n = v2[kind]["per_sample"]["vm_mae"]["n"]
-            L.append(row(f"{label}, mean of {n} runs", v2[kind]["per_sample"], v2[kind]["thesis_way"], multi=True))
-    L += [""]
-    for kind, label in (("gnn", "GNN"), ("pinn", "PINN")):
-        if kind in v2:
-            s = v2[kind]["per_sample"]["vm_mae"]
-            L.append(f"- {label}: |V| MAE over runs {rng(s)}; physics residual of its predictions "
-                     f"{v2[kind]['physics_residual_mean']['mean']:.2e} p.u. per line.")
-    L += [""]
+        L.append(f"- WLS (GridCal): mean physics residual of its estimates {v2['wls']['physics_residual_mean']:.2e} p.u. "
+                 f"per line; {v2['wls']['seconds'] / v2['wls']['per_sample']['samples']:.2f} s per estimate.")
+    L += ["", "The physics residual is |V_i − V_j − Z_ij I_ij| on each line, with I_ij from the readings and",
+          "pseudo-measurements: it is zero only at the true state with exact readings, so it measures how",
+          "far an estimate is from obeying Ohm's law given what the meters say."]
+    if rows:
+        best = min(rows, key=lambda x: x[1]["vm_mae"])
+        L += ["", f"Lowest |V| error: **{LABELS[best[0]]}**.", ""]
+
+    trained = [n for n in V2_MODELS if n in v2]
+    if trained:
+        L += ["## Why the thesis's training falls short", "",
+              "A trained model should have no constant offset on the samples it was trained on: the output",
+              "layer's bias alone could remove it. Measured on 400 of each model's own training samples:", "",
+              "| Model | |V| MAE on its training samples | Mean error (offset) | |V| MAE on the test set |",
+              "|---|---|---|---|"]
+        for name in trained:
+            m = v2[name]
+            L.append(f"| {LABELS[name]} | {f4(m['on_training_samples']['vm_mae']['mean'])} | "
+                     f"{m['on_training_samples']['vm_bias']['mean']:+.4f} (runs {m['on_training_samples']['vm_bias']['min']:+.4f} to "
+                     f"{m['on_training_samples']['vm_bias']['max']:+.4f}) | {f4(m['per_sample']['vm_mae']['mean'])} |")
+        L += ["",
+              "With the thesis's training the model outputs |V| near 0.95 and sin, cos of angles within",
+              "±0.01 rad in raw units, at a learning rate that stays at 1e-3. Adam's steps are then as large",
+              "as the accuracy needed, and training stops wherever the last step left it: errors on training",
+              "and test samples are alike (no overfitting), and most of them are a constant offset that",
+              "differs from run to run (the thesis's own model had +0.008, Table 8). The fixed training",
+              "standardises the outputs, as the thesis already did for the inputs, predicts the angle itself,",
+              "and lets the learning rate decay to zero over the same 100 epochs (`dsse/train.py`).", ""]
+
+    if "select_alpha" in v2:
+        L += ["## The PINN's weight under the fixed training", "",
+              "Rescaling the outputs changes the balance between the data term and the physics term, so α",
+              "was chosen again: each candidate fitted on samples 0–1,399 and scored on 1,400–1,599.", "",
+              "| α | Validation |V| MAE | Physics residual (p.u.) |", "|---|---|---|"]
+        sel = sorted(v2["select_alpha"], key=lambda s: s["alpha"])
+        for s in sel:
+            label = "0 (the GNN)" if s["alpha"] == 0 else f"{s['alpha']:g}"
+            L.append(f"| {label} | {f4(s['vm_mae'])} | {s['physics_residual_mean']:.2e} |")
+        err = [s["vm_mae"] for s in sel]
+        res_ = [s["physics_residual_mean"] for s in sel]
+        trade = all(a <= b for a, b in zip(err, err[1:])) and all(a >= b for a, b in zip(res_, res_[1:]))
+        L += [""]
+        if trade:
+            L += ["The more weight on Ohm's law, the more closely the estimate obeys it and the worse it gets.",
+                  "The residual is computed from the readings, and at 23 of the 33 buses those are forecasts",
+                  "that can be 50% off: holding the estimate to them pulls it towards the power flow of the",
+                  "forecast. WLS also obeys Ohm's law against the same readings, but weighs each reading by how",
+                  "far it can be trusted (1/σ²); the thesis's physics term weighs a forecast like a smart meter.",
+                  "A physics term weighted by the readings' variances is the WLS objective itself, which makes",
+                  "it the natural next step: the hybrid of chapter 7.", ""]
+
+    if "configs" in v2:
+        cfg = v2["configs"]
+        ks = list(cfg)
+        L += ["## Fewer or more meters", "",
+              "The thesis concludes (chapter 7) that the learned estimator keeps 'satisfactory performance",
+              "... with respect to variations in ... measurement configurations', but its models only ever",
+              "saw 10 meters. Here every model trained on 10 meters, and WLS, estimate new samples with 3 to",
+              "20 meters (the same 2 PMUs, more or fewer other meters), 200 samples per count:", "",
+              "| |V| MAE (p.u.) by meters | " + " | ".join(ks) + " |", "|---|" + "---|" * len(ks)]
+        names = ["average_profile", "wls"] + [n for n in V2_MODELS if any(k.startswith(n + "_seed") for k in cfg[ks[0]])]
+        for name in names:
+            vals = []
+            for k in ks:
+                runs = [v["vm_mae"] for key, v in cfg[k].items() if key == name or key.startswith(name + "_seed")]
+                vals.append(f4(float(np.mean(runs))) if runs else "–")
+            L.append(f"| {LABELS[name]} | " + " | ".join(vals) + " |")
+        L += [""]
     return "\n".join(L)
 
 
