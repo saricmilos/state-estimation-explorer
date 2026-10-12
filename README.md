@@ -30,7 +30,20 @@ network (GNN) and a physics-informed one (PINN).
 ## What v2 finds
 
 [reports/phase2-v2.md](reports/phase2-v2.md): WLS, the thesis's GNN and a PINN with a correct
-Ohm's-law term, retrained with the thesis's settings and scored on every bus of 400 test samples.
+Ohm's-law term, retrained and scored on every bus of 400 test samples, then on 3 to 20 meters.
+
+1. **On honest data, the thesis's training isn't enough.** Every model ends with a constant
+   offset, even on its own training samples, and the GNN does worse than always answering the
+   average voltage profile.
+2. **With the training fixed** (standardised outputs, a decaying learning rate; same model and
+   data), the GNN is steady from run to run and clearly better than that baseline.
+3. **WLS is still the most accurate at every number of meters.** On this data the load errors
+   are independent and Gaussian, which is exactly what WLS assumes, so little is left for a
+   learned model to win. The fixed GNN degrades as gracefully as WLS, but stays behind it.
+4. **A correct physics term doesn't help as the thesis framed it.** At the weight chosen on
+   validation the PINN is the GNN; more weight makes it obey Ohm's law better and estimate worse,
+   because the term trusts a 50% load forecast as much as a meter. Weighting it by the readings'
+   variances turns it into the WLS objective: the hybrid the thesis proposed as future work.
 
 ## Run it
 

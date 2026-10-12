@@ -23,7 +23,11 @@ Python 3.11 venv with the thesis's own pins: `pip install -e ".[test]"`, then `p
 
 - `python -m dsse.phase1 gnn|pinn --seed N`, `python -m dsse.phase1 wls`: v1 re-run.
 - `python -m dsse.phase2 gnn|pinn --seed N`, `python -m dsse.phase2 wls`: v2 on the same split.
-- `python -m dsse.evaluate`: writes `reports/` from `data/`. Change the code, never the reports.
+  `--recipe scaled` is the fixed training (`dsse/train.py` says why); the PINN's alpha under it is
+  chosen by `select-alpha --alpha A` runs on samples 1,400-1,599 (`phase2.chosen_alpha()`).
+  `configs` scores every trained model and WLS with 3 to 20 meters; run it after the models.
+- `python -m dsse.evaluate`: writes `reports/` from `data/`. Change the code, never the reports;
+  any sentence in a report that depends on a number is computed there, not typed.
 
 Runs take about 30 minutes each on the CPU (v1's PINN about 4 hours: its physics loss loops over
 edges in Python). `data/` holds the generated datasets and weights and is not committed.

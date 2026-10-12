@@ -6,6 +6,7 @@ reports/results.json   every number in both, for anything that shows them (the w
 """
 
 import contextlib
+import sys
 import io
 import json
 
@@ -198,6 +199,13 @@ def phase1_md(r: dict) -> str:
         ok = "yes" if s["min"] <= p["wls"]["vm_mae"] <= s["max"] else "no"
         L.append(f"| WLS, one sample ({s['n']} draws) | |V| MAE (p.u.) | {f4(p['wls']['vm_mae'])} | {rng(s)} | {ok} |")
     L += [""]
+    q = r["v1"].get("pinn")
+    if q and q["thesis_way"]["mae_mag"]["n"] > 1 and q["thesis_way"]["mae_mag"]["min"] > p["pinn"]["vm_mae"]:
+        b = [x["vm_bias"] for x in q["runs"]]
+        L += [f"The PINN doesn't reproduce: all {len(b)} re-runs land above Table 9, each with a constant",
+              f"offset of {min(b):+.4f} to {max(b):+.4f} p.u. from its physics term (below). Table 9 can't be",
+              "re-made from the thesis's code, so only the thesis's conclusion about the PINN stands: that its",
+              "practical performance was limited.", ""]
 
     L += ["## What the re-run shows", ""]
     if "gnn" in r["v1"]:
@@ -359,12 +367,18 @@ def phase2_md(r: dict) -> str:
         for s in sel:
             label = "0 (the GNN)" if s["alpha"] == 0 else f"{s['alpha']:g}"
             L.append(f"| {label} | {f4(s['vm_mae'])} | {s['physics_residual_mean']:.2e} |")
-        err = [s["vm_mae"] for s in sel]
+        pos = [s for s in sel if s["alpha"] > 0]
+        err = [s["vm_mae"] for s in pos]
         res_ = [s["physics_residual_mean"] for s in sel]
         trade = all(a <= b for a, b in zip(err, err[1:])) and all(a >= b for a, b in zip(res_, res_[1:]))
+        zero = next((s for s in sel if s["alpha"] == 0), None)
         L += [""]
+        if zero and pos:
+            d = pos[0]["vm_mae"] - zero["vm_mae"]
+            L += [f"At α = {pos[0]['alpha']:g}, the weight chosen, the physics term changes the validation error by "
+                  f"{d:+.5f} p.u., {abs(d) / zero['vm_mae']:.0%} of it: the PINN is the GNN.", ""]
         if trade:
-            L += ["The more weight on Ohm's law, the more closely the estimate obeys it and the worse it gets.",
+            L += ["Beyond that, the more weight on Ohm's law, the more closely the estimate obeys it and the worse it gets.",
                   "The residual is computed from the readings, and at 23 of the 33 buses those are forecasts",
                   "that can be 50% off: holding the estimate to them pulls it towards the power flow of the",
                   "forecast. WLS also obeys Ohm's law against the same readings, but weighs each reading by how",
@@ -382,17 +396,38 @@ def phase2_md(r: dict) -> str:
               "20 meters (the same 2 PMUs, more or fewer other meters), 200 samples per count:", "",
               "| |V| MAE (p.u.) by meters | " + " | ".join(ks) + " |", "|---|" + "---|" * len(ks)]
         names = ["average_profile", "wls"] + [n for n in V2_MODELS if any(k.startswith(n + "_seed") for k in cfg[ks[0]])]
+        table = {}
         for name in names:
             vals = []
             for k in ks:
                 runs = [v["vm_mae"] for key, v in cfg[k].items() if key == name or key.startswith(name + "_seed")]
-                vals.append(f4(float(np.mean(runs))) if runs else "–")
-            L.append(f"| {LABELS[name]} | " + " | ".join(vals) + " |")
+                vals.append(float(np.mean(runs)) if runs else float("nan"))
+            table[name] = vals
+            L.append(f"| {LABELS[name]} | " + " | ".join(f4(v) for v in vals) + " |")
         L += [""]
+        best = [min(names, key=lambda n: table[n][i]) for i in range(len(ks))]
+        if all(b == "wls" for b in best):
+            L.append("WLS has the lowest error at every number of meters.")
+        else:
+            L.append("Lowest error by number of meters: " + ", ".join(f"{k}: {LABELS[b]}" for k, b in zip(ks, best)) + ".")
+        for name in ("gnn-scaled", "pinn-scaled"):
+            if name in table:
+                v = table[name]
+                steady = all(a >= b for a, b in zip(v, v[1:]))
+                ratios = [a / w for a, w in zip(v, table["wls"])]
+                L.append(f"{LABELS[name]}, trained on 10 meters only: "
+                         + ("its error falls steadily as meters are added, from " if steady else "its error goes from ")
+                         + f"{f4(v[0])} at {ks[0]} to {f4(v[-1])} at {ks[-1]}; "
+                         f"{min(ratios):.2f} to {max(ratios):.2f} times WLS's.")
+        L += ["",
+              "WLS never fails for lack of meters here: every unmetered bus has a pseudo-measurement, so the",
+              "state is always determined. Without pseudo-measurements it would need enough real meters to be",
+              "observable; that comparison is not part of the thesis and is not made here.", ""]
     return "\n".join(L)
 
 
 def main():
+    sys.stdout.reconfigure(encoding="utf-8")  # the reports use σ, ×, ², which Windows' default can't print
     r = collect()
     paths.REPORTS.mkdir(parents=True, exist_ok=True)
     (paths.REPORTS / "results.json").write_text(json.dumps(r, indent=2), encoding="utf-8")
