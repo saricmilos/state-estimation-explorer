@@ -1,0 +1,26 @@
+[project]
+name = "dsse"
+version = "2.0.0"
+description = "v2 of Miloš Sarić's master's thesis on distribution-system state estimation with GNNs and PINNs"
+requires-python = "==3.11.*"
+# The thesis's own versions (its requirements.txt), so v1's code runs as it did
+dependencies = [
+    "GridCalEngine==5.3.53",
+    "torch==2.7.1",
+    "torch-geometric==2.6.1",
+    "numpy==2.2.6",
+    "pandas==2.3.3",
+    "scipy==1.16.3",
+    "networkx==3.6.1",
+    "matplotlib==3.10.8",
+]
+
+[project.optional-dependencies]
+test = ["pytest"]
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+packages = ["dsse"]
