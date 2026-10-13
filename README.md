@@ -8,9 +8,8 @@ network (GNN) and a physics-informed one (PINN).
 - **v1** is the thesis as I handed it in, code written by hand:
   [state-estimation-GNN-PINN](https://github.com/saricmilos/state-estimation-GNN-PINN). It is never
   changed.
-- **v2** is this repository, built with Claude Code in October 2026. I set the questions and checked
-  every number. It re-runs v1 from its own code, measures what v1 reported, then fixes what was
-  wrong and measures again.
+- **v2** is this repository, built in October 2026. It re-runs v1 from its own code, measures what
+  v1 reported, then fixes what was wrong and measures again.
 
 ## What was wrong with v1
 
