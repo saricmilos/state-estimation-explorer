@@ -6,7 +6,7 @@ with WLS, a GNN and a PINN. v1 is the thesis as handed in.
 | Where | What it is | Rule |
 |---|---|---|
 | `C:\dev\portfolio\state-estimation-GNN-PINN` | v1: the thesis, its code, notebook and PDF, written by hand in 2025-26. | Read-only, always. Never edit, move, reformat or commit there; its history has no AI commits and keeps none. `dsse/__init__.py` turns off bytecode so importing it leaves no `__pycache__`; `tests/test_v2.py` checks its `git status` stays empty. `THESIS_DIR` overrides the path. |
-| this repo | v2, built with Claude Code from October 2026: `dsse/`, `tests/`, `reports/`. | All new work goes here. |
+| this repo | v2, built from October 2026: `dsse/`, `tests/`, `reports/`. | All new work goes here. |
 
 ## How v1 is run
 
