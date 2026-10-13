@@ -25,7 +25,18 @@ Python 3.11 venv with the thesis's own pins: `pip install -e ".[test]"`, then `p
 - `python -m dsse.phase2 gnn|pinn --seed N`, `python -m dsse.phase2 wls`: v2 on the same split.
   `--recipe scaled` is the fixed training (`dsse/train.py` says why); the PINN's alpha under it is
   chosen by `select-alpha --alpha A` runs on samples 1,400-1,599 (`phase2.chosen_alpha()`).
-  `configs` scores every trained model and WLS with 3 to 20 meters; run it after the models.
+  `configs` scores every trained model and both WLS with 0 to 33 meters; run it after the models.
+- For the website (saricmilos.com runs the grid game in the browser, no server):
+  - `dsse/wls_np.py` is the WLS the site ports to TypeScript (Gauss-Newton, dense, no GridCal), with
+    observability from real meters (QR rank test) and bad data (chi-square, largest normalised
+    residual). `phase2 wls-np` scores it next to GridCal's; `phase2 observability` finds the fewest
+    real meters (`dsse/observability.py`, every placement with no two neighbouring gaps).
+  - `phase2 anymeter --seed 0|1|2`: the site's GNN, trained on 0 to 33 meters (its own 4,000
+    samples); the seed with the lowest validation error is the one exported (`phase2.chosen_anymeter()`).
+  - `python -m dsse.export`: writes `feeder.json`, `gnn.json`, `results.json` and a README into
+    `<site>/src/content/state-estimation/`, and the TypeScript port's parity cases into
+    `<site>/scripts/state-estimation/fixtures.json` (`SE_SITE` names the site, else
+    `C:\dev\sites\saricmilos.com`). It touches nothing else in the site and commits nothing there.
 - `python -m dsse.evaluate`: writes `reports/` from `data/`. Change the code, never the reports;
   any sentence in a report that depends on a number is computed there, not typed.
 

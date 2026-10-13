@@ -171,7 +171,7 @@ def estimate_readings(fd: G.Feeder, rd: Readings) -> Estimate:
     v = vm * np.exp(1j * va)
     h, H = measurement_model(ybus, v, rd, fd.slack)
     gain = H.T @ (w[:, None] * H)
-    return Estimate(v, True, np.max(np.abs(dx)) < TOL, it, rd, rd.z - h, H, gain)
+    return Estimate(v, True, bool(np.max(np.abs(dx)) < TOL), it, rd, rd.z - h, H, gain)
 
 
 def estimate(fd: G.Feeder, smp: Sample, angles: bool = False) -> Estimate:

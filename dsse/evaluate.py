@@ -490,21 +490,32 @@ def configs_md(v2: dict) -> list[str]:
     cand = [n for n in table if n != "gnn-anymeter-chosen"]
     best = [min((n for n in cand if not np.isnan(table[n][i])), key=lambda n: table[n][i]) for i in range(len(ks))]
     wls_names = {"wls", "wls-np"}
-    if all(b in wls_names for b in best):
+    won = [k for k, b in zip(ks, best) if b in wls_names]
+    if len(won) == len(ks):
         L.append("WLS has the lowest error at every number of meters.")
     else:
-        L.append("Lowest error by number of meters: " + ", ".join(f"{k}: {labels[b]}" for k, b in zip(ks, best)) + ".")
+        others = [(k, b) for k, b in zip(ks, best) if b not in wls_names]
+        L.append(f"WLS has the lowest error with {', '.join(won)} meters; the exceptions: "
+                 + "; ".join(f"with {k} meter{'s' if k != '1' else ''}, {labels[b]} ({f4(table[b][ks.index(k)])})" for k, b in others) + ".")
+    cfg = v2["configs"]
     if "wls-np" in table and np.isnan(table["wls-np"][0]):
         L.append(f"With {ks[0]} meters nothing reads a voltage and the browser's WLS gives no estimate (the gain "
                  "matrix is singular: the voltage level is not determined); GridCal's damped solver answers anyway, "
-                 "near its flat start of 1 p.u.")
+                 f"with a |V| MAE of {f4(table['wls'][0])}.")
+    one = cfg.get("1", {}).get("wls-np", {})
+    if "vm_mae" in one and one["vm_mae"] > cfg["1"]["average_profile"]["vm_mae"]:
+        L.append(f"With 1 meter WLS is behind the average profile ({f4(one['vm_mae'])} against "
+                 f"{f4(cfg['1']['average_profile']['vm_mae'])}): its one |V| reading sets the level of the whole "
+                 f"estimate, so that reading's error moves every bus. Each sample's mean error follows the reading's "
+                 f"error (correlation {one['offset_reading_correlation']:.2f}), and with that one offset removed the "
+                 f"|V| MAE is {f4(one['vm_mae_offset_removed'])}.")
     ref = table.get("wls-np", table["wls"])
     for name in ("gnn-scaled", "pinn-scaled", "gnn-anymeter"):
         if name in table:
             v = table[name]
             steady = all(a >= b for a, b in zip(v, v[1:]))
             ratios = [a / w for a, w in zip(v, ref) if not np.isnan(w)]
-            trained = "trained on 10 meters only" if name != "gnn-anymeter" else "trained on 0 to 33 meters, mean of its seeds"
+            trained = "trained on 10 meters only" if name != "gnn-anymeter" else "mean of its seeds"
             L.append(f"{labels[name]}, {trained}: "
                      + ("its error falls steadily as meters are added, from " if steady else "its error goes from ")
                      + f"{f4(v[0])} at {ks[0]} to {f4(v[-1])} at {ks[-1]}; "
@@ -643,7 +654,7 @@ def anymeter_md(v2: dict) -> list[str]:
     chosen = m.get("chosen_seed")
     for r in m["runs"]:
         mark = " (chosen)" if r["seed"] == chosen else ""
-        L.append(f"| {r['seed']}{mark} | {f4(r['validation_vm_mae'])} | {f4(r['test_vm_mae'])} | {f4(r['own_test_set_vm_mae'])} |")
+        L.append(f"| {r['seed']}{mark} | {r['validation_vm_mae']:.5f} | {r['test_vm_mae']:.5f} | {r['own_test_set_vm_mae']:.5f} |")
     L += [""]
     if chosen is not None and "gnn-scaled" in v2:
         mine = m["chosen"]["per_sample"]["vm_mae"]
@@ -660,7 +671,8 @@ def anymeter_md(v2: dict) -> list[str]:
                 beats = [k for k, a, b in zip(ks, g, w) if not np.isnan(b) and a < b]
                 L.append("By number of meters (table above), " + (
                     "it is behind WLS at every count where WLS has an estimate"
-                    if not beats else "it is ahead of WLS at " + ", ".join(beats) + " meters")
+                    if not beats else "it is ahead of WLS only with " + ", ".join(beats)
+                    + (" meter" if beats == ["1"] else " meters") + " and behind it at every other count where WLS has an estimate")
                     + (f"; with {ks[0]} meters, where WLS has none, its error is {f4(g[0])} against the average "
                        f"profile's {f4(table['average_profile'][0])}." if np.isnan(w[0]) else "."))
         L += [""]

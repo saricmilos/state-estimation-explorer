@@ -23,6 +23,7 @@ column is the thesis's own metric, for comparison with Tables 7 to 9.
 | PINN (Ohm's law fixed), thesis's training | 3 | 0.0067 | 0.0092 | 0.0196 | 0.0495 | 0.0039 | 0.0032 |
 | GNN, training fixed | 3 | 0.0043 | 0.0062 | 0.0129 | 0.0398 | 0.0023 | 0.0007 |
 | PINN (Ohm's law fixed), training fixed | 3 | 0.0043 | 0.0062 | 0.0129 | 0.0394 | 0.0023 | 0.0006 |
+| GNN trained on 0 to 33 meters (the website's) | 3 | 0.0044 | 0.0064 | 0.0134 | 0.0394 | 0.0023 | 0.0007 |
 
 - GNN, thesis's training: |V| MAE over runs 0.0064–0.0103; mean physics residual of its predictions 3.59e-03 p.u. per line.
 - PINN (Ohm's law fixed), thesis's training: |V| MAE over runs 0.0066–0.0068; mean physics residual of its predictions 2.02e-03 p.u. per line; α = 0.1.
@@ -83,22 +84,28 @@ it the natural next step: the hybrid of chapter 7.
 
 The thesis concludes (chapter 7) that the learned estimator keeps 'satisfactory performance
 ... with respect to variations in ... measurement configurations', but its models only ever
-saw 10 meters. Here every model, and WLS, estimate new samples with 3 to 20 meters (2 of
+saw 10 meters. Here every model, and WLS, estimate new samples with 0 to 33 meters (2 of
 them PMUs, fewer when there are fewer meters), 200 samples per count. Every model but the
 website's GNN was trained on 10 meters only.
 
-| |V| MAE (p.u.) by meters | 3 | 5 | 10 | 15 | 20 |
-|---|---|---|---|---|---|
-| Average profile, no measurements | 0.0071 | 0.0062 | 0.0059 | 0.0061 | 0.0058 |
-| WLS (GridCal) | 0.0050 | 0.0046 | 0.0032 | 0.0028 | 0.0025 |
-| GNN, thesis's training | 0.0091 | 0.0090 | 0.0080 | 0.0077 | 0.0070 |
-| PINN (Ohm's law fixed), thesis's training | 0.0074 | 0.0069 | 0.0064 | 0.0065 | 0.0062 |
-| GNN, training fixed | 0.0062 | 0.0051 | 0.0041 | 0.0037 | 0.0033 |
-| PINN (Ohm's law fixed), training fixed | 0.0062 | 0.0051 | 0.0040 | 0.0036 | 0.0032 |
+| |V| MAE (p.u.) by meters | 0 | 1 | 3 | 5 | 10 | 15 | 20 | 33 |
+|---|---|---|---|---|---|---|---|---|
+| Average profile, no measurements | 0.0063 | 0.0061 | 0.0071 | 0.0062 | 0.0059 | 0.0061 | 0.0058 | 0.0061 |
+| WLS (GridCal) | 0.0940 | 0.0078 | 0.0050 | 0.0046 | 0.0032 | 0.0028 | 0.0025 | 0.0012 |
+| WLS (Gauss-Newton in numpy, the browser's) | – | 0.0074 | 0.0048 | 0.0042 | 0.0030 | 0.0025 | 0.0021 | 0.0012 |
+| GNN, thesis's training | 0.0099 | 0.0091 | 0.0091 | 0.0090 | 0.0080 | 0.0077 | 0.0070 | 0.0070 |
+| PINN (Ohm's law fixed), thesis's training | 0.0070 | 0.0067 | 0.0074 | 0.0069 | 0.0064 | 0.0065 | 0.0062 | 0.0069 |
+| GNN, training fixed | 0.0063 | 0.0059 | 0.0062 | 0.0051 | 0.0041 | 0.0037 | 0.0033 | 0.0029 |
+| PINN (Ohm's law fixed), training fixed | 0.0063 | 0.0059 | 0.0062 | 0.0051 | 0.0040 | 0.0036 | 0.0032 | 0.0028 |
+| GNN trained on 0 to 33 meters (the website's) | 0.0063 | 0.0060 | 0.0064 | 0.0053 | 0.0042 | 0.0037 | 0.0032 | 0.0024 |
+| GNN trained on 0 to 33 meters, seed 0 (in the browser) | 0.0063 | 0.0060 | 0.0064 | 0.0053 | 0.0042 | 0.0037 | 0.0032 | 0.0024 |
 
-WLS has the lowest error at every number of meters.
-GNN, training fixed, trained on 10 meters only: its error falls steadily as meters are added, from 0.0062 at 3 to 0.0033 at 20; 1.11 to 1.32 times the browser's WLS where that has an estimate.
-PINN (Ohm's law fixed), training fixed, trained on 10 meters only: its error falls steadily as meters are added, from 0.0062 at 3 to 0.0032 at 20; 1.11 to 1.30 times the browser's WLS where that has an estimate.
+WLS has the lowest error with 3, 5, 10, 15, 20, 33 meters; the exceptions: with 0 meters, Average profile, no measurements (0.0063); with 1 meter, PINN (Ohm's law fixed), training fixed (0.0059).
+With 0 meters nothing reads a voltage and the browser's WLS gives no estimate (the gain matrix is singular: the voltage level is not determined); GridCal's damped solver answers anyway, with a |V| MAE of 0.0940.
+With 1 meter WLS is behind the average profile (0.0074 against 0.0061): its one |V| reading sets the level of the whole estimate, so that reading's error moves every bus. Each sample's mean error follows the reading's error (correlation 0.83), and with that one offset removed the |V| MAE is 0.0038.
+GNN, training fixed, trained on 10 meters only: its error goes from 0.0063 at 0 to 0.0029 at 33; 0.79 to 2.47 times the browser's WLS where that has an estimate.
+PINN (Ohm's law fixed), training fixed, trained on 10 meters only: its error goes from 0.0063 at 0 to 0.0028 at 33; 0.79 to 2.37 times the browser's WLS where that has an estimate.
+GNN trained on 0 to 33 meters (the website's), mean of its seeds: its error goes from 0.0063 at 0 to 0.0024 at 33; 0.81 to 2.09 times the browser's WLS where that has an estimate.
 
 With pseudo-measurements at every unmetered bus, one real meter is enough for WLS: the forecasts
 fix every injection and the meter fixes the voltage level. Without them, it takes many more
@@ -152,3 +159,17 @@ Every placement that obeys that rule was tested (`dsse/observability.py`, in an 
 **The fewest is 22 meters**, as few as counting allows, and only 4,096 placements of 22 work, each leaving 11 buses without a meter, spread along the feeder. Buses 2, 5, 6, 9, 12, 15, 22, 27, 30 always have one; of each pair 3-4, 7-8, 10-11, 13-14, 16-17, 23-24, 25-26, 28-29, 31-32 exactly one has none; and the other 2 gaps sit among buses 0, 1, 18, 19, 20, 21. The browser's test agrees with this one on 400 of 400 placements checked.
 
 Observable is not accurate. With smart meters and the base-case loads, the estimate's |V| at the worst bus has a standard deviation of 0.062 p.u. at the best of these placements and 0.34 at a typical one; with a smart meter at all 33 buses, 0.0015. At a flat start these placements are barely full rank (the smallest singular value of the reduced system is under 1e-06 of the largest): with no current flowing, a current's in-phase and quadrature parts can only be told apart through lines of different R/X, and IEEE 33's lines come in a few conductor types.
+
+## A GNN for any number of meters (made for the website)
+
+The page lets a visitor place from none to all 33 meters, and every model above saw exactly 10. So
+the website's GNN is the same class with the fixed training (gnn-scaled), on its own data: 4,000 samples, each with 0 to 33 meters drawn uniformly and 0 to 2 PMUs among them, the last 800 its test set. Each of 3 seeds was fitted on the first 3,000 samples, and the browser gets the one with the lowest |V| error on the next 200 (the last of the training samples); neither test set played a part in that choice.
+
+| Seed | Validation |V| MAE | v2's test set (10 meters), |V| MAE | Its own test set (0 to 33 meters), |V| MAE |
+|---|---|---|---|
+| 0 (chosen) | 0.00364 | 0.00443 | 0.00363 |
+| 1 | 0.00364 | 0.00444 | 0.00364 |
+| 2 | 0.00365 | 0.00443 | 0.00363 |
+
+On v2's test set, where every sample has 10 meters, the chosen seed's |V| MAE is 0.0044: 3% above the GNN trained on 10 meters only (0.0043), and 1.40 times the browser's WLS (0.0032).
+By number of meters (table above), it is ahead of WLS only with 1 meter and behind it at every other count where WLS has an estimate; with 0 meters, where WLS has none, its error is 0.0063 against the average profile's 0.0063.

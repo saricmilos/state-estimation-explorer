@@ -307,14 +307,25 @@ def run_configs(num_samples: int = 200) -> dict:
         vm_t, va_t = truth(sm)
         row = {"average_profile": metrics.per_sample(np.broadcast_to(avg_vm, vm_t.shape),
                                                      np.broadcast_to(avg_va, va_t.shape), vm_t, va_t)}
-        v = np.stack([est(s) for s in sm])
+        gc = paths.DATA / f"v2_configs_k{k}_{num_samples}_gridcal.npy"  # the slow part, kept between runs
+        if gc.exists():
+            v = np.load(gc)
+        else:
+            v = np.stack([est(s) for s in sm])
+            np.save(gc, v)
         row["wls"] = metrics.per_sample(np.abs(v), np.angle(v), vm_t, va_t)
         ests = [wls_np.estimate(fd, s) for s in sm]
         seen = [i for i, e in enumerate(ests) if e.observable]
         row["wls-np"] = {"unobservable": len(sm) - len(seen), "samples": len(sm)}
         if seen:
             v = np.stack([ests[i].v for i in seen])
-            row["wls-np"] |= metrics.per_sample(np.abs(v), np.angle(v), vm_t[seen], va_t[seen]) | {"unobservable": len(sm) - len(seen)}
+            err = np.abs(v) - vm_t[seen]
+            offset = err.mean(1, keepdims=True)  # one number per sample: the level of the whole estimate
+            row["wls-np"] |= metrics.per_sample(np.abs(v), np.angle(v), vm_t[seen], va_t[seen]) | {
+                "unobservable": len(sm) - len(seen), "vm_mae_offset_removed": float(np.mean(np.abs(err - offset)))}
+            if k == 1:  # does the one |V| reading's error set that level?
+                reading = [sm[i].obs[np.flatnonzero(sm[i].mask[:, 0])[0], 0] - vm_t[i, np.flatnonzero(sm[i].mask[:, 0])[0]] for i in seen]
+                row["wls-np"]["offset_reading_correlation"] = float(np.corrcoef(offset[:, 0], reading)[0, 1])
         for kind, recipe, model, norm, name in models:
             vm_p, va_p, _ = train.predict(model, norm, data, fd, recipe)
             row[name] = metrics.per_sample(vm_p, va_p, vm_t, va_t)
