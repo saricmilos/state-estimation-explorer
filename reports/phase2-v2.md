@@ -18,6 +18,7 @@ column is the thesis's own metric, for comparison with Tables 7 to 9.
 |---|---|---|---|---|---|---|---|
 | Average profile, no measurements | 1 | 0.0064 | 0.0092 | 0.0198 | 0.0561 | 0.0027 | 0.0003 |
 | WLS (GridCal) | 1 | 0.0036 | 0.0058 | 0.0093 | 0.0713 | 0.0018 | 0.0004 |
+| WLS (Gauss-Newton in numpy, the browser's) | 1 | 0.0032 | 0.0041 | 0.0082 | 0.0271 | 0.0017 | 0.0006 |
 | GNN, thesis's training | 3 | 0.0081 | 0.0103 | 0.0205 | 0.0503 | 0.0037 | 0.0064 |
 | PINN (Ohm's law fixed), thesis's training | 3 | 0.0067 | 0.0092 | 0.0196 | 0.0495 | 0.0039 | 0.0032 |
 | GNN, training fixed | 3 | 0.0043 | 0.0062 | 0.0129 | 0.0398 | 0.0023 | 0.0007 |
@@ -28,12 +29,13 @@ column is the thesis's own metric, for comparison with Tables 7 to 9.
 - GNN, training fixed: |V| MAE over runs 0.0043–0.0043; mean physics residual of its predictions 2.15e-03 p.u. per line.
 - PINN (Ohm's law fixed), training fixed: |V| MAE over runs 0.0042–0.0043; mean physics residual of its predictions 1.82e-03 p.u. per line; α = 0.1.
 - WLS (GridCal): mean physics residual of its estimates 3.65e-04 p.u. per line; 0.92 s per estimate.
+- WLS (Gauss-Newton in numpy, the browser's): the same readings and objective as GridCal's; GridCal stops short of its minimum on 10 of the 400 samples (see 'WLS for the browser'); 0.03 s per estimate.
 
 The physics residual is |V_i − V_j − Z_ij I_ij| on each line, with I_ij from the readings and
 pseudo-measurements: it is zero only at the true state with exact readings, so it measures how
 far an estimate is from obeying Ohm's law given what the meters say.
 
-Lowest |V| error: **WLS (GridCal)**.
+Lowest |V| error: **WLS (Gauss-Newton in numpy, the browser's)**.
 
 ## Why the thesis's training falls short
 
@@ -81,8 +83,9 @@ it the natural next step: the hybrid of chapter 7.
 
 The thesis concludes (chapter 7) that the learned estimator keeps 'satisfactory performance
 ... with respect to variations in ... measurement configurations', but its models only ever
-saw 10 meters. Here every model trained on 10 meters, and WLS, estimate new samples with 3 to
-20 meters (the same 2 PMUs, more or fewer other meters), 200 samples per count:
+saw 10 meters. Here every model, and WLS, estimate new samples with 3 to 20 meters (2 of
+them PMUs, fewer when there are fewer meters), 200 samples per count. Every model but the
+website's GNN was trained on 10 meters only.
 
 | |V| MAE (p.u.) by meters | 3 | 5 | 10 | 15 | 20 |
 |---|---|---|---|---|---|
@@ -94,9 +97,58 @@ saw 10 meters. Here every model trained on 10 meters, and WLS, estimate new samp
 | PINN (Ohm's law fixed), training fixed | 0.0062 | 0.0051 | 0.0040 | 0.0036 | 0.0032 |
 
 WLS has the lowest error at every number of meters.
-GNN, training fixed, trained on 10 meters only: its error falls steadily as meters are added, from 0.0062 at 3 to 0.0033 at 20; 1.11 to 1.32 times WLS's.
-PINN (Ohm's law fixed), training fixed, trained on 10 meters only: its error falls steadily as meters are added, from 0.0062 at 3 to 0.0032 at 20; 1.11 to 1.30 times WLS's.
+GNN, training fixed, trained on 10 meters only: its error falls steadily as meters are added, from 0.0062 at 3 to 0.0033 at 20; 1.11 to 1.32 times the browser's WLS where that has an estimate.
+PINN (Ohm's law fixed), training fixed, trained on 10 meters only: its error falls steadily as meters are added, from 0.0062 at 3 to 0.0032 at 20; 1.11 to 1.30 times the browser's WLS where that has an estimate.
 
-WLS never fails for lack of meters here: every unmetered bus has a pseudo-measurement, so the
-state is always determined. Without pseudo-measurements it would need enough real meters to be
-observable; that comparison is not part of the thesis and is not made here.
+With pseudo-measurements at every unmetered bus, one real meter is enough for WLS: the forecasts
+fix every injection and the meter fixes the voltage level. Without them, it takes many more
+(below).
+
+## WLS for the browser
+
+The page runs WLS in the browser, where GridCal can't go, so `dsse/wls_np.py` solves the same
+problem in plain numpy, written to be ported line for line: the angles of buses 1-32 and |V| of
+all 33 as the state, |V|, P and Q at buses as the readings, weighted by 1/variance, Gauss-Newton
+from a flat start with a dense Cholesky solve. It converges in 5 to 6 steps, 34 ms per estimate here.
+
+On the 400 test samples, next to GridCal's estimates of the same readings:
+
+| Samples | Largest |V| gap (p.u.) | Mean |V| gap | Largest angle gap (rad) | Mean angle gap |
+|---|---|---|---|---|
+| The 390 where GridCal reaches the minimum | 1.2e-10 | 9.0e-13 | 3.0e-10 | 2.1e-12 |
+| All 400 | 6.4e-02 | 5.5e-04 | 1.4e-02 | 6.7e-05 |
+
+On the other 10 GridCal stops short: its weighted squared error there is 5 to 99 times the minimum Gauss-Newton reaches. In every one of them GridCal's Levenberg-Marquardt takes steps until one is refused, then refuses every step after it (28-31 iterations, e.g. `+++++++++++++++++++++----------`, + taken, - refused): GridCal 5.3.53 judges each step by the objective at the state before it, so after one refusal the state stops changing, every later ratio is 0, and the damping grows until the step is under the tolerance, which it reports as converged (`dsse.wls.lm_steps`).
+
+So WLS is a little better than the v2 table above says: at the minimum its |V| MAE on the test set is 0.0032, not 0.0036.
+
+The PMUs' angles, which GridCal can't take, are an option (off by default, to match GridCal); with them the |V| MAE is 0.00315 against 0.00317, barely lower: an angle read to ±0.01 rad (its bias) says little on a feeder whose angles stay within ±0.01 rad.
+
+## Bad data
+
+Two tests from the same matrices. The chi-square test: at the estimate J(x) should follow a chi-square distribution with (readings − 65) degrees of freedom, so above its 99% point something is wrong. The largest normalised residual test: r_N = |r_i| / sqrt(Ω_ii), with Ω = R − H G⁻¹ Hᵀ; while the largest is above 3, remove that reading and estimate again.
+
+On the 400 clean test samples the chi-square test fires on 2 and the residual test removes a reading from 13. Then one gross error, 10 standard deviations on one real meter's |V|, P or Q (chosen at random), in each sample:
+
+| Reading with the error | Trials | Chi-square fires | Residual test removes it | |V| MAE clean | with the error | after the test |
+|---|---|---|---|---|---|---|
+| |V| | 126 | 126 | 126 | 0.0032 | 0.0080 | 0.0033 |
+| P | 130 | 2 | 0 | 0.0031 | 0.0032 | 0.0032 |
+| Q | 144 | 1 | 0 | 0.0032 | 0.0032 | 0.0033 |
+
+A meter's |V| is checked by everything around it: a median 92% of its error shows in its own residual. Its P and Q are not: 1.4% and 0.6% (medians), because the only readings that could contradict them are the neighbours' forecasts, which are 50% uncertain. An error of e standard deviations gives r_N of about e times that share, so a P error would need some 211 standard deviations to cross 3. Without more real meters around it, a wrong P or Q is absorbed, not caught; at 10 standard deviations it also barely moves the |V| estimate (0.0031 to 0.0032 for P), since the readings that absorb it are the uncertain ones.
+
+## Observability from real meters alone
+
+Pseudo-measurements make every placement observable. Without them, the readings themselves must
+determine all 65 unknowns (32 angles and 33 magnitudes), and a meter reads 3 numbers, so no fewer than 22 meters can do it. The test is the rank of the gain matrix at a flat start (`wls_np.observable`, by QR of the Jacobian). One more rule is exact: two neighbouring buses can't both be unmetered, because every bus beyond the line between them could turn by the same small angle with the two unknown injections absorbing the change in that line's flow, and no reading would move.
+
+Every placement that obeys that rule was tested (`dsse/observability.py`, in an equivalent smaller system: a metered bus's P and Q fix its own current, so only |V0| and the unmetered buses' currents are left, seen through the |V| readings):
+
+| Meters | Placements with no two neighbouring gaps | Observable |
+|---|---|---|
+| 22 | 1,673,828 | 4,096 |
+
+**The fewest is 22 meters**, as few as counting allows, and only 4,096 placements of 22 work, each leaving 11 buses without a meter, spread along the feeder. Buses 2, 5, 6, 9, 12, 15, 22, 27, 30 always have one; of each pair 3-4, 7-8, 10-11, 13-14, 16-17, 23-24, 25-26, 28-29, 31-32 exactly one has none; and the other 2 gaps sit among buses 0, 1, 18, 19, 20, 21. The browser's test agrees with this one on 400 of 400 placements checked.
+
+Observable is not accurate. With smart meters and the base-case loads, the estimate's |V| at the worst bus has a standard deviation of 0.062 p.u. at the best of these placements and 0.34 at a typical one; with a smart meter at all 33 buses, 0.0015. At a flat start these placements are barely full rank (the smallest singular value of the reduced system is under 1e-06 of the largest): with no current flowing, a current's in-phase and quadrature parts can only be told apart through lines of different R/X, and IEEE 33's lines come in a few conductor types.

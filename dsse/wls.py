@@ -40,3 +40,35 @@ class Estimator:
         se.run()
         self._clear()
         return np.array(se.results.voltage)
+
+
+def lm_steps(est: Estimator, smp: Sample) -> str:
+    """Which of GridCal's Levenberg-Marquardt steps on one sample were taken ('+') and which refused ('-').
+
+    GridCal 5.3.53 (solve_se_lm) judges each new step by how much the previous one lowered the
+    objective: the objective it compares is the one at the current state, before the new step. So a
+    step that raises the objective is kept, and the step after it is refused; the state then stops
+    changing, every later ratio is exactly 0, every later step is refused, and the damping doubles
+    until the step is below the tolerance, where GridCal reports convergence. Recorded by watching
+    its Jacobian, which it forms once before the loop and again after each step it takes."""
+    import sys
+
+    mod = sys.modules["GridCalEngine.Simulations.StateEstimation.state_estimation"]
+    events = []
+    jacobian, solve = mod.Jacobian_SE, mod.spsolve
+
+    def jacobian_spy(*a):
+        events.append("J")
+        return jacobian(*a)
+
+    def solve_spy(*a):
+        events.append("s")
+        return solve(*a)
+
+    mod.Jacobian_SE, mod.spsolve = jacobian_spy, solve_spy
+    try:
+        est(smp)
+    finally:
+        mod.Jacobian_SE, mod.spsolve = jacobian, solve
+    steps = "".join(events[1:]).split("s")[1:]
+    return "".join("+" if s == "J" else "-" for s in steps)

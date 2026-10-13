@@ -126,7 +126,8 @@ def to_data(fd: G.Feeder, smp: Sample) -> Data:
 
 def generate(num_samples: int = 2000, seed: int = 42, n_metered=10, n_pmu=2):
     """Operating points and readings, with the true states from GridCal's Newton-Raphson.
-    `n_metered` may be a callable rng -> int (for a model that sees every number of meters)."""
+    `n_metered` may be a callable rng -> int and `n_pmu` a callable (rng, meters) -> int (for a model
+    that sees every number of meters); an int `n_pmu` is capped at the number of meters."""
     g = G.load_gridcal()
     fd = G.feeder(g)
     _, s_base = G.gridcal_power_flow(g, fd.p_load, fd.q_load)
@@ -137,17 +138,28 @@ def generate(num_samples: int = 2000, seed: int = 42, n_metered=10, n_pmu=2):
         factor = 1.0 + LOAD_SPREAD * rng.normal(size=fd.n)
         v, s = G.gridcal_power_flow(g, fd.p_load * factor, fd.q_load * factor)
         k = n_metered(rng) if callable(n_metered) else n_metered
-        metered, pmus = place_meters(fd.n, rng, k, min(n_pmu, k))
+        pmu = n_pmu(rng, k) if callable(n_pmu) else min(n_pmu, k)
+        metered, pmus = place_meters(fd.n, rng, k, pmu)
         samples.append(measure(v, s, metered, pmus, prior, rng))
     return fd, samples
 
 
-def dataset(num_samples: int = 2000, seed: int = 42, name: str = "v2"):
+def any_meters(rng) -> int:
+    """For the website's GNN: 0 to 33 meters, each count equally likely."""
+    return int(rng.integers(0, 34))
+
+
+def any_pmus(rng, meters: int) -> int:
+    """0 to 2 PMUs among the meters, each count equally likely, never more than the meters."""
+    return int(rng.integers(0, min(2, meters) + 1))
+
+
+def dataset(num_samples: int = 2000, seed: int = 42, name: str = "v2", n_metered=10, n_pmu=2):
     """The samples and their graphs, made once and cached in data/."""
     cache = paths.DATA / f"{name}_33bw_{num_samples}_seed{seed}.pt"
     if cache.exists():
         return torch.load(cache, weights_only=False)
-    fd, samples = generate(num_samples, seed)
+    fd, samples = generate(num_samples, seed, n_metered, n_pmu)
     out = (fd, samples, [to_data(fd, s) for s in samples])
     cache.parent.mkdir(parents=True, exist_ok=True)
     torch.save(out, cache)
