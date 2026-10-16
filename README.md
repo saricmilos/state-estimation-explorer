@@ -5,7 +5,7 @@ Physics-Informed Neural Networks* (UPC Barcelona, 2026), estimated the voltage a
 IEEE 33-bus feeder from a few meters, three ways: weighted least squares (WLS), a graph neural
 network (GNN) and a physics-informed one (PINN).
 
-- **v1** is the thesis as I handed it in, code written by hand:
+- **v1** is the thesis as I handed it in:
   [state-estimation-GNN-PINN](https://github.com/saricmilos/state-estimation-GNN-PINN). It is never
   changed.
 - **v2** is this repository, built in October 2026. It re-runs v1 from its own code, measures what
